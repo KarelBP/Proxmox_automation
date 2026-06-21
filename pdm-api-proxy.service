@@ -1,0 +1,29 @@
+[Unit]
+Description=PDM API Proxy
+After=network.target proxmox-datacenter-manager.service
+Wants=proxmox-datacenter-manager.service
+
+[Service]
+Type=simple
+User=pdm-api-proxy
+Group=www-data
+WorkingDirectory=/opt/pdm-api-proxy
+
+# Read proxy config to get listen address/port and TLS cert paths.
+# Cert and key default to /etc/proxmox-datacenter-manager/auth/api.pem + api.key.
+ExecStart=/usr/bin/uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 9006 \
+    --ssl-certfile /etc/proxmox-datacenter-manager/auth/api.pem \
+    --ssl-keyfile  /etc/proxmox-datacenter-manager/auth/api.key \
+    --log-level info
+
+# Override TLS paths here if you use a custom certificate instead of the PDM default:
+# --ssl-certfile /etc/pdm-api-proxy/proxy.crt \
+# --ssl-keyfile  /etc/pdm-api-proxy/proxy.key \
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?><unload unload_date="2026-06-21 08:13:31">
+<sys_remote_update_set action="INSERT_OR_UPDATE">
+<application display_value="Global">global</application>
+<application_name>Global</application_name>
+<application_scope>global</application_scope>
+<application_version/>
+<collisions/>
+<commit_date/>
+<deleted/>
+<description/>
+<inserted/>
+<name>Alias Proxmox automation</name>
+<origin_sys_id/>
+<parent display_value=""/>
+<release_date/>
+<remote_base_update_set display_value=""/>
+<remote_parent_id/>
+<remote_sys_id>5af656eac3e18b14982a7d0ed401316e</remote_sys_id>
+<state>loaded</state>
+<summary/>
+<sys_class_name>sys_remote_update_set</sys_class_name>
+<sys_created_by>karel.benes</sys_created_by>
+<sys_created_on>2026-06-21 08:13:29</sys_created_on>
+<sys_id>9097da2ec3e18b14982a7d0ed40131ee</sys_id>
+<sys_mod_count>0</sys_mod_count>
+<sys_updated_by>karel.benes</sys_updated_by>
+<sys_updated_on>2026-06-21 08:13:29</sys_updated_on>
+<update_set display_value=""/>
+<update_source display_value=""/>
+<updated/>
+</sys_remote_update_set>
+<sys_update_xml action="INSERT_OR_UPDATE">
+<action>INSERT_OR_UPDATE</action>
+<application display_value="Global">global</application>
+<category>customer</category>
+<comments/>
+<name>sys_alias_5dbf05b4c3edcf90982a7d0ed40131ab</name>
+<payload><![CDATA[<?xml version="1.0" encoding="UTF-8"?><record_update table="sys_alias"><sys_alias action="INSERT_OR_UPDATE"><configuration_template/><connection_type>http_connection</connection_type><description/><id>Alias_Proxmox_automation</id><is_internal>false</is_internal><multiple_connections>false</multiple_connections><name>Alias Proxmox automation</name><parent/><retry_policy display_value="Default HTTP Retry Policy">ef751ff07301330025d71afe2ff6a7f9</retry_policy><sys_class_name>sys_alias</sys_class_name><sys_created_by>karel.benes</sys_created_by><sys_created_on>2026-06-15 16:30:24</sys_created_on><sys_id>5dbf05b4c3edcf90982a7d0ed40131ab</sys_id><sys_mod_count>3</sys_mod_count><sys_name>Alias_Proxmox_automation</sys_name><sys_package display_value="Global" source="global">global</sys_package><sys_policy/><sys_scope display_value="Global">global</sys_scope><sys_update_name>sys_alias_5dbf05b4c3edcf90982a7d0ed40131ab</sys_update_name><sys_updated_by>karel.benes</sys_updated_by><sys_updated_on>2026-06-21 08:12:09</sys_updated_on><type>connection</type></sys_alias></record_update>]]></payload>
+<payload_hash>648309698</payload_hash>
+<remote_update_set display_value="Alias Proxmox automation">9097da2ec3e18b14982a7d0ed40131ee</remote_update_set>
+<replace_on_upgrade>false</replace_on_upgrade>
+<sys_created_by>karel.benes</sys_created_by>
+<sys_created_on>2026-06-21 08:13:29</sys_created_on>
+<sys_id>d497da2ec3e18b14982a7d0ed40131ee</sys_id>
+<sys_mod_count>0</sys_mod_count>
+<sys_recorded_at>19ee93cb10d0000001</sys_recorded_at>
+<sys_updated_by>karel.benes</sys_updated_by>
+<sys_updated_on>2026-06-21 08:13:29</sys_updated_on>
+<table/>
+<target_name>Alias_Proxmox_automation</target_name>
+<type>Connection &amp; Credential Aliases</type>
+<update_domain>global</update_domain>
+<update_guid>e047d22e42e18b14f47266e0b9863d2c</update_guid>
+<update_guid_history>e047d22e42e18b14f47266e0b9863d2c:648309698,9627162e2ae18b14019df98a3264813c:-1374653866,4ed5957c422103d01778999e9f732ddc:648309698,b0cf09b4feedcf90e928eef0da8c9a7e:652905223</update_guid_history>
+<update_set display_value=""/>
+<view/>
+</sys_update_xml>
+</unload>

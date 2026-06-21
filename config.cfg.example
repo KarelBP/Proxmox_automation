@@ -1,0 +1,21 @@
+# /etc/pdm-api-proxy/config.cfg
+
+[proxy]
+listen_host = 0.0.0.0
+listen_port = 9006
+
+[tls]
+# Upstream TLS verification when talking to PVE nodes.
+# true  — verify with system CA store
+# false — skip verification (not recommended)
+# /path/to/ca.pem — verify with a custom CA bundle
+verify = true
+
+[tls_server]
+# TLS certificate for the proxy's own HTTPS listener.
+# Defaults to the PDM TLS certificate (separate cert + key files).
+# Uncomment and adjust only if you want to use a different certificate.
+#certfile = /etc/pdm-api-proxy/proxy.crt
+#keyfile  = /etc/pdm-api-proxy/proxy.key
+certfile = /etc/proxmox-datacenter-manager/auth/api.pem
+keyfile  = /etc/proxmox-datacenter-manager/auth/api.key
