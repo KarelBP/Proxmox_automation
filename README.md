@@ -32,3 +32,6 @@ pdm-api-proxy-service => Service definition.
 
 proxy.py => Generic transparent proxy layer. Forwards any request to the correct PVE node, replacing the Authorization
 header with the PVE token stored in remotes.shadow.
+
+## Articles
+[AI to the Rescue](https://www.linkedin.com/pulse/ai-rescue-karel-bene%25C5%25A1-xuemf/) - Proxmox, ServiceNow automation and two new buzzwords.
