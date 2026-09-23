@@ -23,6 +23,11 @@ class PVEProxy:
         self._clients: dict[str, httpx.AsyncClient] = {}
 
     async def _get_client(self, node: str) -> httpx.AsyncClient:
+        # base_url_for_node resolves the base URL from THAT node's own
+        # entry in remotes.cfg (address + port), not from the first node
+        # configured for the remote — each node gets its own cached
+        # client, keyed by node name, precisely because a cluster's nodes
+        # can each listen on a different port.
         if node not in self._clients or self._clients[node].is_closed:
             self._clients[node] = httpx.AsyncClient(
                 base_url=self.remote.base_url_for_node(node),

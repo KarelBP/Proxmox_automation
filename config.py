@@ -6,6 +6,28 @@ Reads:
   /etc/proxmox-datacenter-manager/remotes.shadow
   /etc/pdm-api-proxy/config.cfg
   /etc/pdm-api-proxy/tokens
+
+The remotes.cfg / remotes.shadow format is owned by Proxmox Datacenter
+Manager itself, which writes both files. This parser follows what PDM
+actually produces rather than what the format looks like at first glance,
+because two things here were wrong until they were fixed:
+
+  1. _parse_stanzas used to store repeated field keys (e.g. two separate
+     "nodes" lines for a two-node cluster — PDM writes one line per value,
+     not one space-separated line) in a plain dict, so the second line
+     silently overwrote the first and one node disappeared with no error.
+     Repeated keys are now accumulated instead of overwritten.
+  2. base_url_for_node used to take the port from the FIRST configured
+     node only and apply it to every node in the remote. That discarded
+     per-node information remotes.cfg explicitly carries, and address
+     splitting via a bare ":" split was not IPv6-safe (it turned
+     "[fe80::1]:8006" into hostname "[fe80"). Each node now parses its
+     own hostname/port via _split_address, bracket-aware.
+
+One consequence is easy to undo by accident: base_url_for_node falls back
+to the FIRST configured node's port for a node name that is not listed in
+remotes.cfg, not to the hard default port. See base_url_for_node for why
+that distinction matters before changing it.
 """
 
 import re
@@ -121,10 +143,104 @@ def load_tokens(path: Path = PROXY_TOKENS) -> set[str]:
 # PDM remotes
 # ---------------------------------------------------------------------------
 
+def _split_address(address: str) -> tuple[str, int]:
+    """
+    Split one remotes.cfg node address into (hostname, port).
+
+    A plain rsplit(":") cannot tell a colon-separated port apart from an
+    IPv6 literal, so this handles each form PDM can write explicitly:
+
+        pve1                 -> ("pve1", 8006)          no port given
+        pve1:8006            -> ("pve1", 8006)
+        192.168.0.11:8006    -> ("192.168.0.11", 8006)
+        [fe80::1]:8006       -> ("fe80::1", 8006)       bracketed literal
+        fe80::1              -> ("fe80::1", 8006)       bare literal
+
+    The returned hostname has no brackets, since that is what has to match
+    a PVE node name. base_url_for_node puts the brackets back for the URL
+    (see RemoteNode.url_host).
+
+    A bare IPv6 literal is recognised by having more than one colon and no
+    brackets — an unbracketed literal cannot carry a port unambiguously,
+    so there is no port to look for. An unparseable port falls back to the
+    default instead of raising: a malformed address should cost that one
+    node, not the whole config load.
+    """
+    stripped_address = address.strip()
+
+    if stripped_address.startswith("["):
+        closing_bracket_index = stripped_address.find("]")
+        if closing_bracket_index == -1:
+            # Unterminated bracket — nothing sensible to split on.
+            return stripped_address, PVE_PORT
+
+        hostname = stripped_address[1:closing_bracket_index]
+        remainder = stripped_address[closing_bracket_index + 1:]
+
+        if not remainder.startswith(":"):
+            return hostname, PVE_PORT
+
+        port_str = remainder[1:]
+        try:
+            port = int(port_str)
+        except ValueError:
+            return hostname, PVE_PORT
+        return hostname, port
+
+    colon_count = stripped_address.count(":")
+
+    if colon_count == 0:
+        return stripped_address, PVE_PORT
+
+    if colon_count > 1:
+        # More than one colon with no brackets — bare IPv6 literal, no port.
+        return stripped_address, PVE_PORT
+
+    address_parts = stripped_address.rsplit(":", 1)
+    hostname = address_parts[0]
+    port_str = address_parts[1]
+
+    try:
+        port = int(port_str)
+    except ValueError:
+        return stripped_address, PVE_PORT
+
+    return hostname, port
+
+
 @dataclass
 class RemoteNode:
-    address: str        # e.g. 192.168.0.11:8006 or hostname:8006
+    address: str        # e.g. 192.168.0.11:8006, hostname:8006, [fe80::1]:8006
     fingerprint: str    # e.g. 7F:B6:... (informational, not used for TLS)
+
+    @property
+    def hostname(self) -> str:
+        """This node's hostname with the port removed — what PVE calls it."""
+        hostname, _ = _split_address(self.address)
+        return hostname
+
+    @property
+    def port(self) -> int:
+        """
+        This node's own port, defaulting to 8006 when the address carries
+        none. Deliberately per-node: taking the port from the first
+        configured node and applying it to every node (the old behavior)
+        discarded information remotes.cfg explicitly provides.
+        """
+        _, port = _split_address(self.address)
+        return port
+
+    @property
+    def url_host(self) -> str:
+        """
+        The hostname as it must appear in a URL: an IPv6 literal gets its
+        brackets back, everything else is unchanged. Without this,
+        https://fe80::1:8006/... would be unparseable.
+        """
+        hostname = self.hostname
+        if ":" in hostname:
+            return f"[{hostname}]"
+        return hostname
 
 
 @dataclass
@@ -141,24 +257,53 @@ class Remote:
             raise ValueError(f"Remote '{self.name}' has no token (shadow not readable?)")
         return f"PVEAPIToken={self.authid}={self.token}"
 
+    def node_by_name(self, node: str) -> Optional[RemoteNode]:
+        """The configured RemoteNode whose hostname is `node`, if any."""
+        for remote_node in self.nodes:
+            if remote_node.hostname == node:
+                return remote_node
+        return None
+
     def base_url_for_node(self, node: str) -> str:
         """
-        Build base URL for a specific node resolved by DNS.
-        Port is taken from the first address in remotes.cfg, defaulting to 8006.
-        """
-        port = self._port_from_nodes()
-        return f"https://{node}:{port}/api2/json"
+        Build the API base URL for one node, using THAT node's own address
+        and port as configured in remotes.cfg — not the first node's port
+        applied to every node (see the module docstring).
 
-    def _port_from_nodes(self) -> int:
-        """Extract port from first known node address, fallback to 8006."""
-        if self.nodes:
-            addr = self.nodes[0].address
-            if ":" in addr:
-                try:
-                    return int(addr.rsplit(":", 1)[1])
-                except ValueError:
-                    pass
-        return PVE_PORT
+        A node name that is NOT in remotes.cfg keeps its name as the host
+        (DNS resolves it, which is what this proxy has always relied on)
+        and borrows the first configured node's port.
+
+        That fallback carries more weight than it looks. The node name
+        comes from the CALLER's request path
+        (/api2/json/pve/remotes/{remote}/nodes/{node}/...), while
+        remotes.cfg may well list its addresses as IPs — in which case
+        every lookup misses and the fallback is what actually runs.
+        Falling back to the hard default PVE_PORT would silently ignore a
+        cluster's non-default port that the old first-node-port behavior
+        got right. Borrowing the first node's port keeps that case working
+        exactly as before, which makes the per-node fix above a strict
+        improvement over the old behavior rather than a trade.
+        """
+        remote_node = self.node_by_name(node)
+
+        if remote_node is not None:
+            return f"https://{remote_node.url_host}:{remote_node.port}/api2/json"
+
+        fallback_port = self._fallback_port()
+        return f"https://{node}:{fallback_port}/api2/json"
+
+    def _fallback_port(self) -> int:
+        """
+        The port to use for a node that is not listed in remotes.cfg: the
+        first configured node's port, or the PVE default when this remote
+        has no nodes at all.
+        """
+        if not self.nodes:
+            return PVE_PORT
+
+        first_node = self.nodes[0]
+        return first_node.port
 
 
 def _parse_stanzas(text: str) -> list[dict]:
@@ -175,19 +320,40 @@ def _parse_stanzas(text: str) -> list[dict]:
     current = None
 
     for line in text.splitlines():
-        if not line.strip() or line.strip().startswith("#"):
+        stripped_line = line.strip()
+        if not stripped_line:
+            continue
+        if stripped_line.startswith("#"):
             continue
 
-        header = re.match(r'^(\w+):\s+(.+)$', line)
-        if header:
+        header_match = re.match(r'^(\w+):\s+(.+)$', line)
+        if header_match:
             if current is not None:
                 stanzas.append(current)
-            current = {"type": header.group(1), "name": header.group(2).strip(), "fields": {}}
+            stanza_type = header_match.group(1)
+            stanza_name = header_match.group(2).strip()
+            current = {"type": stanza_type, "name": stanza_name, "fields": {}}
             continue
 
         field_match = re.match(r'^\s+(\S+)\s+(.*)', line)
         if field_match and current is not None:
-            current["fields"][field_match.group(1)] = field_match.group(2).strip()
+            field_key = field_match.group(1)
+            field_value = field_match.group(2).strip()
+
+            existing_value = current["fields"].get(field_key)
+            if existing_value is None:
+                current["fields"][field_key] = field_value
+            else:
+                # PDM repeats a key on its own line for each value instead
+                # of putting all values on one line (confirmed: a two-node
+                # cluster's remotes.cfg has TWO separate "nodes" lines, not
+                # one "nodes host1:port host2:port" line). A plain dict
+                # assignment here would silently overwrite the first node
+                # with the second — accumulate with a space instead, since
+                # _parse_nodes() below already splits multi-node values on
+                # whitespace regardless of whether they came from one line
+                # or several.
+                current["fields"][field_key] = f"{existing_value} {field_value}"
 
     if current is not None:
         stanzas.append(current)
@@ -199,14 +365,25 @@ def _parse_nodes(nodes_str: str) -> list[RemoteNode]:
     """
     Parse the nodes field value:
       '192.168.0.11:8006,fingerprint=7F:B6:...'
-    Multiple nodes are separated by whitespace.
+    Multiple nodes are separated by whitespace. `nodes_str` is already the
+    accumulated value from every "nodes" line in the stanza (see the
+    repeated-key handling in _parse_stanzas), so a multi-node cluster
+    written as several lines and one written on a single line both land
+    here as one whitespace-separated string.
     """
     result = []
-    for entry in nodes_str.split():
+    entries = nodes_str.split()
+
+    for entry in entries:
         parts = entry.split(",fingerprint=")
         address = parts[0].strip()
-        fingerprint = parts[1].strip() if len(parts) > 1 else ""
+
+        fingerprint = ""
+        if len(parts) > 1:
+            fingerprint = parts[1].strip()
+
         result.append(RemoteNode(address=address, fingerprint=fingerprint))
+
     return result
 
 
@@ -224,25 +401,42 @@ def load_remotes(
     remotes: dict[str, Remote] = {}
 
     cfg_text = cfg_path.read_text()
-    for stanza in _parse_stanzas(cfg_text):
+    cfg_stanzas = _parse_stanzas(cfg_text)
+
+    for stanza in cfg_stanzas:
         if stanza["type"] != "pve":
             continue
+
         name = stanza["name"]
         fields = stanza["fields"]
         authid = fields.get("authid", "")
         nodes_str = fields.get("nodes", "")
-        nodes = _parse_nodes(nodes_str) if nodes_str else []
+
+        nodes = []
+        if nodes_str:
+            nodes = _parse_nodes(nodes_str)
+
         remotes[name] = Remote(name=name, authid=authid, nodes=nodes)
 
     if shadow_path.exists():
         shadow_text = shadow_path.read_text()
-        for stanza in _parse_stanzas(shadow_text):
+        shadow_stanzas = _parse_stanzas(shadow_text)
+
+        for stanza in shadow_stanzas:
             if stanza["type"] != "pve":
                 continue
+
             name = stanza["name"]
             token = stanza["fields"].get("token")
-            # Skip placeholder tokens ("-") written by PDM when shadow is unavailable
-            if token and token != "-" and name in remotes:
-                remotes[name].token = token
+
+            # Skip placeholder tokens ("-") written by PDM when shadow is unavailable.
+            if not token:
+                continue
+            if token == "-":
+                continue
+            if name not in remotes:
+                continue
+
+            remotes[name].token = token
 
     return remotes

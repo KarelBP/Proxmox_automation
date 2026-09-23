@@ -36,7 +36,7 @@ from fastapi import FastAPI, HTTPException, Request, Security
 from fastapi.responses import Response
 from fastapi.security import APIKeyHeader
 
-from config import ProxyConfig, load_remotes, load_tokens
+from config import ProxyConfig, Remote, load_remotes, load_tokens
 from proxy import ProxyPool
 
 
@@ -103,6 +103,17 @@ async def lifespan(app: FastAPI):
     else:
         log.info(f"Loaded {len(valid_tokens)} token(s)")
 
+    # KNOWN LIMITATION: remotes.cfg/remotes.shadow are read exactly once,
+    # here, and PVEProxy bakes each remote's token into the Authorization
+    # header of a cached httpx client when that client is first created.
+    # Nothing re-reads either file afterwards, so:
+    #   - a token rotated in remotes.shadow is never picked up; every
+    #     forwarded call 401s until this service is restarted, which makes
+    #     a routine credential rotation look like a full-cluster outage
+    #   - a remote newly enrolled in PDM stays a 404 until restart
+    # Fixing this means re-reading both files periodically AND discarding
+    # the cached client of any remote whose token changed — the header
+    # cannot be swapped on a client that already exists.
     remotes = load_remotes()
     pool.load(remotes, tls_verify=proxy_cfg.tls_verify)
     log.info(f"Loaded remotes: {pool.list_remotes()}")
@@ -123,6 +134,35 @@ app = FastAPI(
     version="0.3.0",
     lifespan=lifespan,
 )
+
+# ---------------------------------------------------------------------------
+# Node resolution
+# ---------------------------------------------------------------------------
+
+def resolve_node(path: str, remote: Remote) -> str:
+    """
+    Work out which PVE node a request path targets.
+
+    - "nodes/{node}/..." paths name the node explicitly.
+    - Cluster-level paths (e.g. "cluster/nextid") carry no node, so fall
+      back to the hostname of the first node configured for this remote.
+
+    Raises ValueError when the remote has no nodes configured at all, so
+    the caller can turn that into the right HTTP error.
+    """
+    node_match = re.match(r"^nodes/([^/]+)(/.*)?$", path)
+    if node_match:
+        return node_match.group(1)
+
+    remote_nodes = remote.nodes
+    if not remote_nodes:
+        raise ValueError(f"Remote '{remote.name}' has no nodes configured")
+
+    # Use RemoteNode.hostname rather than address.split(":")[0]: a bare
+    # ":" split breaks on a bracketed IPv6 literal such as
+    # "[fe80::1]:8006", which yields "[fe80" instead of "fe80::1".
+    return remote_nodes[0].hostname
+
 
 # ---------------------------------------------------------------------------
 # Single wildcard endpoint
@@ -157,14 +197,10 @@ async def generic_proxy(
     # Extract node name from path — expected prefix: nodes/{node}/...
     # For cluster-level paths (e.g. cluster/nextid) there is no node in the path;
     # fall back to the hostname of the first node listed in remotes.cfg.
-    node_match = re.match(r"^nodes/([^/]+)(/.*)?$", path)
-    if node_match:
-        node = node_match.group(1)
-    else:
-        first_addr = pve_proxy.remote.nodes[0].address if pve_proxy.remote.nodes else None
-        if not first_addr:
-            raise HTTPException(status_code=502, detail=f"Remote '{remote}' has no nodes configured")
-        node = first_addr.split(":")[0]
+    try:
+        node = resolve_node(path, pve_proxy.remote)
+    except ValueError:
+        raise HTTPException(status_code=502, detail=f"Remote '{remote}' has no nodes configured")
 
     query_params = dict(request.query_params)
     body = await request.body()
